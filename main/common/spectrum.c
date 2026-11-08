@@ -6,6 +6,7 @@
 #include "spectrum_math.h"
 #include "spectrum_fft.h"
 #include "spectrum_stats.h"
+#include "esp_attr.h"
 #include "esp_cpu.h"
 #include "burst_serial.h"
 #include "dsps_fft2r.h"
@@ -23,6 +24,10 @@
 #if CONFIG_IDF_TARGET_ESP32C2
 /* Quiescent during RF capture; keep heap/stacks in the other SRAM banks. */
 #define SPEC_STORAGE __attribute__((section(".c2_spectrum"), aligned(16)))
+#elif CONFIG_IDF_TARGET_ESP32C5 && CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY
+/* The WiFi+BLE build no longer fits under the RF-dump bank guard in internal
+ * SRAM; the N16R8's quad PSRAM takes the FFT working set instead. */
+#define SPEC_STORAGE EXT_RAM_BSS_ATTR
 #else
 #define SPEC_STORAGE
 #endif

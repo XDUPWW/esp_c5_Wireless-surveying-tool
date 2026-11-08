@@ -18,7 +18,10 @@
 #include "nvs_flash.h"
 #include "soc/soc.h"
 #include "riscv/rv_utils.h"
+#include "soc/soc_caps.h"
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
 #include "hal/usb_serial_jtag_ll.h"
+#endif
 
 #ifndef CONFIG_IDF_TARGET_ESP32C6
 #define CONFIG_IDF_TARGET_ESP32C6 0
@@ -33,6 +36,9 @@
 #endif
 #include "rx_tuning.h"
 #include "rx_recalibration.h"
+#if CONFIG_IDF_TARGET_ESP32C5
+#include "mode_manager.h"
+#endif
 extern void phy_stop_tx_tone(unsigned);
 extern void phy_pbus_workmode(void);
 extern void phy_pbus_xpd_rx_on(unsigned);
@@ -273,6 +279,14 @@ static bool ring_test(const char *line) {
 
 static void handle_command(char *line);
 
+#if CONFIG_IDF_TARGET_ESP32C5
+/* A monitor session may have handed the PHY to the Wi-Fi/BLE stacks; make
+ * the next capture rebuild the RX test state instead of trusting rx_ready. */
+void sdr_rx_invalidate(void) { rx_ready = false; }
+/* iq_stream: the estimator needs the same RX test state as a capture. */
+void sdr_ensure_rx(void) { prepare_rx(); }
+#endif
+
 void app_main(void) {
 
     esp_log_level_set("*", ESP_LOG_NONE);
@@ -282,8 +296,10 @@ void app_main(void) {
         e = nvs_flash_init();
     }
     ESP_ERROR_CHECK(e);
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
     usb_serial_jtag_driver_config_t usb = {.tx_buffer_size = 512, .rx_buffer_size = 512};
     ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&usb));
+#endif
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
 #if CONFIG_IDF_TARGET_ESP32C61 || CONFIG_IDF_TARGET_ESP32C6
@@ -298,9 +314,14 @@ void app_main(void) {
     ESP_ERROR_CHECK(esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE));
     prepare_rx();
     esp_log_level_set("*", ESP_LOG_NONE);
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
     (void)usb_serial_jtag_wait_tx_done(pdMS_TO_TICKS(100));
     ESP_ERROR_CHECK(usb_serial_jtag_driver_uninstall());
+#endif
     burst_serial_init();
+#if CONFIG_IDF_TARGET_ESP32C5
+    mode_manager_init();
+#endif
     burst_serial_serve(handle_command);
 }
 
@@ -310,6 +331,16 @@ void app_main(void) {
 static void handle_command(char *line) {
     if (burst_version_command(line)) return;
     if (burst_gpio_command(line)) return;
+#if CONFIG_IDF_TARGET_ESP32C5
+    if (mode_manager_command(line)) return;
+    /* The RF belongs to a monitor: snapshot and spectrum commands would
+     * collide with the protocol stacks on the PHY. */
+    if (mode_manager_busy() && (!strncmp(line, "CAP", 3) || !strncmp(line, "RXRUN", 5) ||
+                                !strncmp(line, "SPEC", 4))) {
+        reply("ERR mode_busy\n");
+        return;
+    }
+#endif
 #ifdef RING_PROBE
     if (ring_probe_command(line)) return;
 #endif
@@ -330,6 +361,9 @@ static void handle_command(char *line) {
         reply(
             "CAPS VERSION GPIO SPEC SPECN SPECCAPS SPECSTAT DCT UARTBAUD RXLIMITS GAIN HWAGC IQ8 SERIALLEASE"
             " TUNEEXT"
+#if CONFIG_IDF_TARGET_ESP32C5
+            " MON WIFIMON BLEMON"
+#endif
 #if CONFIG_IDF_TARGET_ESP32C6
             " RX40 RX16"
 #else

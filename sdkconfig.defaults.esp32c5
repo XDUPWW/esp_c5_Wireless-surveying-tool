@@ -1,5 +1,10 @@
+# The WiFi+BLE build exceeds the built-in SINGLE_APP table's 1 MB factory
+# partition; use the project's table (factory 4 MB).
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_IDF_TARGET="esp32c5"
-CONFIG_ESPTOOLPY_FLASHSIZE_2MB=y
+# N16R8 module: 16 MB quad-SPI flash (datasheet ordering table 1-1).
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_ESP_PHY_ENABLE_CERT_TEST=y
 CONFIG_ESP_PHY_DEBUG=y
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
@@ -18,8 +23,47 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 # CONFIG_ESP_WIFI_AMPDU_TX_ENABLED is not set
 # CONFIG_ESP_WIFI_AMPDU_RX_ENABLED is not set
 
-# Native USB and the UART0 bridge share the burst receiver.
-CONFIG_ESP_SDR_UART_ENABLED=y
-CONFIG_ESP_SDR_UART_BAUD=2000000
-CONFIG_ESP_SDR_UART_TX_PIN=11
-CONFIG_ESP_SDR_UART_RX_PIN=12
+# USB-Serial-JTAG only; UART0 transport disabled (GPIO11/12 free).
+# CONFIG_ESP_SDR_UART_ENABLED is not set
+# Continuous-IQ pacing callback runs directly in the systimer ISR.
+CONFIG_ESP_TIMER_SUPPORTS_ISR_DISPATCH_METHOD=y
+
+# BLE monitor: NimBLE observer-only role, sharing the RF with Wi-Fi through
+# the software coexistence scheduler.
+#
+# RAM: the reserved RF-dump bank starts at 0x40820000 and static sections
+# must stay below it (sram_guard.ld). These trims keep a WiFi+BLE build
+# inside the 128 KiB region: the observer role only needs scan reports, so
+# drop central-role GATT client, pairing, SoftAP, and shrink static buffers.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+# CONFIG_BT_NIMBLE_ROLE_CENTRAL is not set
+# CONFIG_BT_NIMBLE_ROLE_PERIPHERAL is not set
+# Broadcaster stays on for the compile only: IDF 5.3's ble_gap.c calls
+# ble_gap_adv_active_instance() outside any role guard, and
+# NIMBLE_BLE_ADVERTISE = broadcaster || peripheral. We never advertise.
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
+# CONFIG_BT_NIMBLE_SM_LEGACY is not set
+# CONFIG_BT_NIMBLE_SM_SC is not set
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_MAX_BONDS=1
+CONFIG_BT_NIMBLE_TRANSPORT_ACL_FROM_LL_COUNT=6
+# N16R8 module: 8 MB quad-SPI PSRAM. Big static buffers (spectrum FFT,
+# monitor frame pool) are placed there via EXT_RAM_BSS_ATTR so the internal
+# SRAM stays below the reserved RF-dump bank guard (sram_guard.ld).
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+# NimBLE host dynamic memory from PSRAM; the controller still uses internal.
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
+# ESP-IDF 5.3.1 ships ESP32-C5 Wi-Fi/PHY libraries (incl. librftest.a) but
+# leaves SOC_WIFI_SUPPORTED commented out (TODO IDF-8851), so this hidden
+# option defaults to n and the whole Wi-Fi Kconfig menu vanishes. Force it on;
+# upstream builds against a newer pinned IDF instead.
+CONFIG_ESP_WIFI_ENABLED=y
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=4
+CONFIG_ESP_WIFI_MGMT_SBUF_NUM=8
+# CONFIG_ESP_WIFI_SOFTAP_SUPPORT is not set
+# CONFIG_ESP_WIFI_NVS_ENABLED is not set

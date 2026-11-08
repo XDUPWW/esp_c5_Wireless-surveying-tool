@@ -52,6 +52,12 @@ elseif(IDF_TARGET STREQUAL "esp32c5" OR IDF_TARGET STREQUAL "esp32c6" OR IDF_TAR
     endif()
     list(APPEND probes SAMPLE_RATE_PROBE FILTER_REGISTER_PROBE C5_TUNE_PROBE)
 endif()
+if(IDF_TARGET STREQUAL "esp32c5")
+    # Monitor modes: Wi-Fi promiscuous and BLE passive-scan observers share
+    # the RF with the SDR snapshot path through the mode manager.
+    list(APPEND sources "common/mode_manager.c" "common/wifi_monitor.c" "common/ble_monitor.c" "common/iq_stream.c")
+    list(APPEND dependencies bt)
+endif()
 
 if(IDF_TARGET STREQUAL "esp32s31")
     list(APPEND sources "${target_dir}/s31_fft_rnd.S" "${target_dir}/s31_unpack.S")
