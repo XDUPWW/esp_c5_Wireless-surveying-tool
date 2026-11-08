@@ -1,6 +1,6 @@
 # ESP-SDR firmware
 
-<img src="docs/espargos-logo.png" width="40%" align="right" alt="ESPARGOS logo">
+<img src="espargos-logo.png" width="40%" align="right" alt="ESPARGOS logo">
 
 ### Try it yourself: [Project overview](https://espargos.net/espsdr/) · [Browser SDR viewer](https://espargos.net/espsdr/app/) · [Browser firmware installer](https://espargos.net/espsdr/app/flash.html)
 
@@ -11,12 +11,12 @@ No extra SDR hardware is needed.
 
 <br clear="all">
 
-![ESP32 radio architecture: an undocumented debug path connects the ADC/DAC to the CPU, bypassing the fixed-function Wi-Fi modem.](docs/sdr-bypass.png)
+![ESP32 radio architecture: an undocumented debug path connects the ADC/DAC to the CPU, bypassing the fixed-function Wi-Fi modem.](sdr-bypass.png)
 
 The ESP32's receiver normally feeds its samples straight into the fixed-function
 Wi-Fi modem. With the help of LLMs, we found an undocumented debug path that
 lets the CPU read those samples instead.
-[How it works](docs/how-it-works.md) explains the mechanism register by register. Parts of the firmware are
+[How it works](how-it-works.md) explains the mechanism register by register. Parts of the firmware are
 AI-generated: we understand the capture mechanism well on the ESP32-C61 used in
 our ESPARGOS One array, but porting it to the whole ESP32 family by hand would
 have been too much work.
@@ -40,7 +40,7 @@ with [SoapyESPSDR](https://github.com/ESPARGOS/SoapyESPSDR), or an ESP32-S3 with
 | ESP32-C5 | ✅ | Serial/JTAG | GPIO11 / GPIO12 | 80 … 4 | also receives 5 GHz |
 | ESP32-C6 | ✅ | Serial/JTAG | GPIO16 / GPIO17 | 80, 40, 16 | continuous capture¹ (256 bins) |
 | ESP32-C61 | ✅ | Serial/JTAG | GPIO11 / GPIO10 | 80 … 4 | continuous capture¹ (256 bins) |
-| ESP32-H2 | ✅ | Serial/JTAG | GPIO24 / GPIO23 | 32, 16, 10.667, 6.4 | Bluetooth radio, see [esp32h2.md](docs/esp32h2.md) |
+| ESP32-H2 | ✅ | Serial/JTAG | GPIO24 / GPIO23 | 32, 16, 10.667, 6.4 | Bluetooth radio, see [esp32h2.md](esp32h2.md) |
 | ESP32-H21 | 🚧 | | | | |
 | ESP32-H4 | 🚧 | | | | |
 | ESP32-P4 | ❌ | | | | no radio |
@@ -62,7 +62,7 @@ snapshots".
 All chips accept tuning from 100 to 6000 MHz, but the PLL only locks in a
 limited range around 2.4 GHz (and 5 GHz on the C5). ESP32, C2, C3, S2 and S3
 reach down to about 1.85 GHz using a 5/6 LO divider, the C6 to about 1.95 GHz;
-see [rx-controls.md](docs/rx-controls.md).
+see [rx-controls.md](rx-controls.md).
 
 Snapshots are bursts of up to 16,380 samples (8,190 on the C2 and 12,284 on the
 S2), so there are gaps between them. Gain is not calibrated in dB.
@@ -75,26 +75,26 @@ rates above. This is what the browser viewer uses.
 **On-chip spectra** (all chips): the firmware computes 256–2048-bin FFTs and
 sends compact spectra instead of raw samples. On the C6, C61, S3 and S31 over
 native USB, the receiver keeps recording between FFTs (continuous capture¹),
-but only part of the signal is analyzed. See [spectrum.md](docs/spectrum.md). The original S3 Turbo
+but only part of the signal is analyzed. See [spectrum.md](spectrum.md). The original S3 Turbo
 Mode was developed by Zoltan Doczi from [Z2Labs](https://www.z2labs.io/).
 
 **Continuous I/Q on the ESP32-S3**: the second core filters and decimates the
 16 MS/s stream to 15.625–250 kS/s, sent gap-free over native USB. See
-[iq-stream.md](docs/iq-stream.md).
+[iq-stream.md](iq-stream.md).
 
 **ESP32-S31 streaming** (separate `esp32s31-stream` firmware, experimental):
 continuous 8-bit I/Q at up to 20 MS/s over high-speed USB or 40 MS/s over
 Gigabit Ethernet, for [SoapyESPSDR](https://github.com/ESPARGOS/SoapyESPSDR).
-See [s31-streaming.md](docs/s31-streaming.md).
+See [s31-streaming.md](s31-streaming.md).
 
-![Gqrx displaying an LTE signal at 2.63 GHz, continuously sampled at 40 MSa/s over Ethernet with an ESP32-S31 and SoapyESPSDR.](docs/gqrx-esp-sdr.png)
+![Gqrx displaying an LTE signal at 2.63 GHz, continuously sampled at 40 MSa/s over Ethernet with an ESP32-S31 and SoapyESPSDR.](gqrx-esp-sdr.png)
 
 ## Talking to the firmware
 
 The firmware speaks a simple line-based protocol over native USB or UART
 (2 Mbaud): `INFO`, `FREQ 2442`, `CAP16 4096 0` and so on, with binary payloads
 protected by CRC32. The full command reference is in
-[protocol.md](docs/protocol.md).
+[protocol.md](protocol.md).
 
 A few practical notes:
 
@@ -126,7 +126,7 @@ builds a release image the same way CI does. Host-side tests run with
 `python3 -m unittest discover -s tests`. On real hardware,
 `tools/check_spectrum.py` checks every spectrum profile of a connected board.
 
-Chip-specific notes: [ESP32-C2](docs/esp32c2.md), [ESP32-H2](docs/esp32h2.md).
+Chip-specific notes: [ESP32-C2](esp32c2.md), [ESP32-H2](esp32h2.md).
 
 ## Source layout
 
