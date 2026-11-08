@@ -1,6 +1,6 @@
-# ESP-SDR 调试工具（ESP32-C5 无线勘察）
+# ESP32-C5 无线勘察工具
 
-> 50 块不到的板子，一边看频谱，一边抓 Wi-Fi/BLE 报文；再把它接进 SDR#、Python 和 MATLAB。
+> 固件基于 [ESP-SDR](https://github.com/ESPARGOS/esp-sdr)：50 块不到的板子，一边看频谱，一边抓 Wi-Fi/BLE 报文，再把它接进 SDR#、Python 和 MATLAB。
 
 这个仓库是基于 [ESPARGOS/esp-sdr](https://github.com/ESPARGOS/esp-sdr) 的 **ESP32-C5** 分支，
 不是另一个 SDR 硬件，而是在 ESP-SDR 的原始 I/Q 通路之外，把 ESP32 自带的协议栈接收能力也用起来：

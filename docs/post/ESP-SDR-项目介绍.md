@@ -240,7 +240,7 @@ idf.py -p COMx flash monitor
 
 - **项目地址**：`https://github.com/z2labs/esp-sdr-bridge`
 
-## 基于开源项目的 ESP-SDR 调试工具
+## ESP32-C5 无线勘察工具：在 ESP-SDR 之上补的三步
 
 基于开源项目 **ESP-SDR**，参考 **zephyr_esp_sdr / esp-sdr-bridge**，实现了一个 ESP-SDR 的 GUI 调试工具。项目的出发点并不是做一个“频谱工具”，而是想给 ESP-SDR 补上它缺的半个能力：**协议栈抓包**。后续又沿着其他平台和项目的做法，逐步补出了连续采样和桌面 SDR 软件接入。
 

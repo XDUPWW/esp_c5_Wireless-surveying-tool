@@ -1,4 +1,4 @@
-# ESP-SDR 调试工具 (esp_sdr_gui.py)
+# ESP32-C5 无线勘察工具 (esp_sdr_gui.py)
 
 ESP32-C5 三模式固件（SDR / WiFi Monitor / BLE Monitor）的 Python + tkinter 图形调试工具。
 仅依赖标准库 + pyserial（无需 numpy/matplotlib；SDR 频谱使用固件片上 FFT 的 SPEC 流）。

@@ -700,7 +700,7 @@ class IQStreamer(threading.Thread):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("ESP-SDR 调试工具 (ESP32-C5)")
+        self.title("ESP32-C5 无线勘察工具 (ESP-SDR)")
         self.geometry("1080x760")
         self.link = None
         self.mode = None           # None | 'SDR' | 'WIFI' | 'BLE'
