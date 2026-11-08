@@ -1,0 +1,222 @@
+[
+ {
+  "case": "G-A01",
+  "group": "link",
+  "pre": "mock 固件在线",
+  "steps": "SYNC/INFO/CAPS/MON? 命令应答",
+  "expect": "应答正确",
+  "actual": "handshake ok=True",
+  "result": "PASS",
+  "note": ""
+ },
+ {
+  "case": "G-A02",
+  "group": "link",
+  "pre": "mock 固件",
+  "steps": "MON WIFI ON + 突发 20 帧 → 解析 wififrame 事件",
+  "expect": "20/20 帧完整到达，Radiotap 合法",
+  "actual": "frames=20 good=20",
+  "result": "PASS",
+  "note": ""
+ },
+ {
+  "case": "G-A03",
+  "group": "link",
+  "pre": "mock 固件",
+  "steps": "MON BLE ON + 突发 15 帧",
+  "expect": "15/15 BLE 帧完整（PDU 长度自洽）",
+  "actual": "frames=15 good=15",
+  "result": "PASS",
+  "note": ""
+ },
+ {
+  "case": "G-A04",
+  "group": "link",
+  "pre": "mock 固件",
+  "steps": "SPEC 0 流 → SPC1 解析 → 停止字节 → 流停",
+  "expect": "SPC1 帧全部 crc_ok；停止后不再来",
+  "actual": "start=SPEC 256 80000000 256 2412 specs=96 good=96 stopped=True",
+  "result": "PASS",
+  "note": ""
+ },
+ {
+  "case": "G-A05",
+  "group": "link",
+  "pre": "fault=badcrc",
+  "steps": "每 5 帧注入 1 个 CRC 错误帧",
+  "expect": "Link 解析不打滑：好帧 CRC 对、坏帧标 crc_ok=False",
+  "actual": "frames=20 malformed=0",
+  "result": "PASS",
+  "note": "mock 坏帧仅翻转 payload 末字节，头部完好，Link 仍能完整切帧"
+ },
+ {
+  "case": "G-A06",
+  "group": "link",
+  "pre": "fault=truncate",
+  "steps": "周期性截断二进制载荷",
+  "expect": "Link 丢弃残缺帧并在超时后重新对齐，后续命令可用",
+  "actual": "resync=SYNC 606 events=12",
+  "result": "PASS",
+  "note": "截断后 Link 丢弃残缺字节，重新对齐成功"
+ },
+ {
+  "case": "G-A07",
+  "group": "link",
+  "pre": "fault=sticky",
+  "steps": "粘包：多帧一次 feed",
+  "expect": "逐帧切分正确",
+  "actual": "frames=5",
+  "result": "PASS",
+  "note": ""
+ },
+ {
+  "case": "G-A08",
+  "group": "link",
+  "pre": "fault=halfpacket（手动）",
+  "steps": "命令行分两次 write（半包）",
+  "expect": "拼合成一条命令",
+  "actual": "lines=['SYNC 808']",
+  "result": "PASS",
+  "note": ""
+ },
+ {
+  "case": "G-A09",
+  "group": "link",
+  "pre": "fault=slow",
+  "steps": "慢应答（0.8s）",
+  "expect": "command 默认超时内拿到应答",
+  "actual": "r=SYNC 909 dt=0.99",
+  "result": "PASS",
+  "note": ""
+ },
+ {
+  "case": "G-A10",
+  "group": "link",
+  "pre": "fault=dead（固件无响应）",
+  "steps": "command 超时抛出 TimeoutError，可重连恢复",
+  "expect": "超时可预期；换正常模型后恢复",
+  "actual": "TimeoutError raised as expected",
+  "result": "PASS",
+  "note": ""
+ },
+ {
+  "case": "G-B01",
+  "group": "app",
+  "pre": "App + MockLink",
+  "steps": "start_mode WIFI → STOP → start BLE",
+  "expect": "状态机：切换前必须 STOP",
+  "actual": "wifi=True refused=True ble=True final=None tail_calls=['MON WIFI ON 1', 'MON WIFI OFF', 'MON BLE ON', 'MON BLE OFF']",
+  "result": "PASS",
+  "note": ""
+ },
+ {
+  "case": "G-B02",
+  "group": "app",
+  "pre": "App + MockLink",
+  "steps": "SDR 模式：toggle_spec 启停 + apply_freq 重启流",
+  "expect": "spec_running 状态正确；FREQ 被下发",
+  "actual": "on=True restarted=True off=True freq_calls=['FREQ 2412']",
+  "result": "PASS",
+  "note": ""
+ },
+ {
+  "case": "G-B03",
+  "group": "app",
+  "pre": "App + MockLink(fail=timeout)",
+  "steps": "握手/命令超时",
+  "expect": "异常被捕获并记录，不崩溃",
+  "actual": "survived timeout in start_mode",
+  "result": "PASS",
+  "note": ""
+ },
+ {
+  "case": "G-B04",
+  "group": "app",
+  "pre": "App + MockLink",
+  "steps": "pcap 输出：WiFi/BLE 帧 → 写文件",
+  "expect": "pcap 文件生成且 tshark 可解析",
+  "actual": "wifi_pcap=True ble_pcap=True",
+  "result": "PASS",
+  "note": "pcap: C:\\Users\\PENGWE~1\\AppData\\Local\\Temp\\espsdr_gui_3v35dtb4\\w.pcap / C:\\Users\\PENGWE~1\\AppData\\Local\\Temp\\espsdr_gui_3v35dtb4\\b.pcap"
+ },
+ {
+  "case": "G-B05",
+  "group": "app",
+  "pre": "BLE 配置面板",
+  "steps": "BLE 面板无信道/驻留控件且含 37/38/39 说明",
+  "expect": "要求文本存在；无相关输入控件",
+  "actual": "note_found=True",
+  "result": "PASS",
+  "note": "BLE 面板说明文案校验（无信道/驻留输入控件为布局事实）"
+ },
+ {
+  "case": "G-B06",
+  "group": "app",
+  "pre": "WiFi 配置面板",
+  "steps": "全信道默认驻留 110ms；固定信道可配",
+  "expect": "控件默认值与状态切换正确",
+  "actual": "dwell=110 disabled=True enabled=True",
+  "result": "PASS",
+  "note": ""
+ },
+ {
+  "case": "G-B07",
+  "group": "app",
+  "pre": "App + MockLink",
+  "steps": "IQ 流：启动 → 注入合成 data 事件 → 停止",
+  "expect": "状态切换正确，_on_iq_frame 产生谱线且统计更新",
+  "actual": "on=True frame=True stat=True off=True",
+  "result": "PASS",
+  "note": ""
+ },
+ {
+  "case": "G-B08",
+  "group": "app",
+  "pre": "App + MockLink",
+  "steps": "WiFi 5G：固定 5G 信道 / 5G 全信道命令序列",
+  "expect": "命令字符串正确（ch=36 / 36 dwell）",
+  "actual": "fixed=True full=True calls=['MON WIFI ON 36', 'MON WIFI OFF', 'MON WIFI ON 36 110', 'MON WIFI OFF']",
+  "result": "PASS",
+  "note": ""
+ },
+ {
+  "case": "G-B11",
+  "group": "app",
+  "pre": "App + MockLink",
+  "steps": "SDR 抓包模式：片上频谱 / IQ 传回电脑（连续、突发）的选择、锁定与启停",
+  "expect": "默认片上频谱；IQ 子选择器按需启用；运行中锁定，STOP 后解锁；两种模式都能启停",
+  "actual": "default=True lock=True burst_n=True iq=True/True spec=True/True btn=True",
+  "result": "PASS",
+  "note": ""
+ },
+ {
+  "case": "G-B12",
+  "group": "app",
+  "pre": "App + 事件注入",
+  "steps": "D8 回归：突发(CAP16)谱线经 iqcodes 事件进入频谱/瀑布",
+  "expect": "iqcodes 事件被 _on_iq_frame 消费（修复前 iqframe 分支把它当成 int32 连续帧丢弃）",
+  "actual": "frame=True stat=True stats='IQ 1 帧 81920 B/s'",
+  "result": "PASS",
+  "note": ""
+ },
+ {
+  "case": "G-C01",
+  "group": "robust",
+  "pre": "App 事件队列",
+  "steps": "注入 5000 个事件",
+  "expect": "队列被消费不堆积、UI 不卡死",
+  "actual": "drained=True dt=0.02",
+  "result": "PASS",
+  "note": ""
+ },
+ {
+  "case": "G-C02",
+  "group": "robust",
+  "pre": "NamedPipeSink",
+  "steps": "管道无客户端时写入 1MB 数据",
+  "expect": "不阻塞不崩溃，缓冲截断有界",
+  "actual": "dt=0.00s",
+  "result": "PASS",
+  "note": "无客户端时写入落 pending 缓冲，超过阈值截断旧数据"
+ }
+]

@@ -1,184 +1,114 @@
-# ESP-SDR firmware
+# ESP-SDR 调试工具（ESP32-C5 无线勘察）
 
-<img src="docs/espargos-logo.png" width="40%" align="right" alt="ESPARGOS logo">
+> 50 块不到的板子，一边看频谱，一边抓 Wi-Fi/BLE 报文；再把它接进 SDR#、Python 和 MATLAB。
 
-### Try it yourself: [Project overview](https://espargos.net/espsdr/) · [Browser SDR viewer](https://espargos.net/espsdr/app/) · [Browser firmware installer](https://espargos.net/espsdr/app/flash.html)
+这个仓库是基于 [ESPARGOS/esp-sdr](https://github.com/ESPARGOS/esp-sdr) 的 **ESP32-C5** 分支，
+不是另一个 SDR 硬件，而是在 ESP-SDR 的原始 I/Q 通路之外，把 ESP32 自带的协议栈接收能力也用起来：
 
-ESP-SDR turns the Wi-Fi/Bluetooth radio of an ordinary ESP32 board into a
-receive-only software-defined radio. The firmware captures raw I/Q samples from
-the chip's own receiver and sends them to your computer over USB or UART.
-No extra SDR hardware is needed.
+- **协议栈抓包**：Wi-Fi 混杂监听（Radiotap + 完整 802.11 帧）、BLE 被动扫描（完整广播 PDU），
+  直接存成 Wireshark 能开的 pcap，也可以走命名管道实时看。
+- **连续 I/Q**：C5 的 SRAM bank 不能乒乓，所以用调制解调器的 I/Q estimator 做无间隙采样
+  （10k–80k S/s），思路移植自 [cyber-murmel/esp-sdr-zephyr](https://github.com/cyber-murmel/esp-sdr-zephyr)。
+- **接进桌面 SDR 生态**：主机侧模拟一台 PlutoSDR（libiio/iiod），SDR# 的 PlutoSDR 源、
+  Python `pylibiio`、MATLAB 自带的 `iio_readdev` 都能直接控制它、读它的样本。
 
-<br clear="all">
+配一个单文件 GUI（`monitor_gui/esp_sdr_gui.exe`，零安装）就能把上面三件事点出来。
 
-![ESP32 radio architecture: an undocumented debug path connects the ADC/DAC to the CPU, bypassing the fixed-function Wi-Fi modem.](docs/sdr-bypass.png)
+## 三种用途，一台射频
 
-The ESP32's receiver normally feeds its samples straight into the fixed-function
-Wi-Fi modem. With the help of LLMs, we found an undocumented debug path that
-lets the CPU read those samples instead.
-[How it works](docs/how-it-works.md) explains the mechanism register by register. Parts of the firmware are
-AI-generated: we understand the capture mechanism well on the ESP32-C61 used in
-our ESPARGOS One array, but porting it to the whole ESP32 family by hand would
-have been too much work.
+射频前端只有一个：SDR 要让 PHY 进 RX 测试模式，监听要把 PHY 交给协议栈，两种状态没法共存。
+所以固件里有一个 `mode_manager` 负责"谁在用射频"，**同一时刻只跑一种，切换前必须 STOP**。
 
-## Quick start
+| 模式 | 数据从哪来 | 主机拿到什么 | 实测 |
+| --- | --- | --- | --- |
+| SDR · 片上频谱 | dump engine → 固件做 FFT | 256–2048 个功率 bin（`SPC1`） | ~430 帧/s @80 MS/s |
+| SDR · 连续 I/Q | IQ estimator 累加器 | int32 交错 I/Q，10k–80k S/s | 80 kS/s ≈ 636 kB/s |
+| SDR · 突发 I/Q | dump engine 的 SRAM bank | 单次快照 256–16380 点 | ~20 帧/s |
+| Wi-Fi Monitor | 802.11 协议栈混杂回调 | Radiotap + 完整 802.11 帧 | ~400 帧/s @繁忙 2.4G |
+| BLE Monitor | NimBLE 被动扫描 | 完整广播 PDU（37/38/39） | ~40 帧/s @实验室 |
+| SDR# 桥接 | 主机侧 libiio/iiod | int16 I/Q（由连续 I/Q 插值） | 客户端请求速率 |
 
-1. Flash the firmware from the [browser installer](https://espargos.net/espsdr/app/flash.html).
-2. Open the [browser viewer](https://espargos.net/espsdr/app/) and connect.
+## 快速开始
 
-For continuous streaming into Gqrx, GNU Radio and friends, use an ESP32-S31
-with [SoapyESPSDR](https://github.com/ESPARGOS/SoapyESPSDR), or an ESP32-S3 with
-[esp-sdr-bridge](https://github.com/z2labs/esp-sdr-bridge).
+### 1. 构建固件
 
-## Supported chips
+需要 ESP-IDF（本分支在 **v6.1** 上验证；上游固定的旧 IDF 缺少 C5 的 dump-engine 符号）：
 
-| Chip | Status | Native USB | UART0 TX / RX | Sample rates (MS/s) | Notes |
-| --- | --- | --- | --- | --- | --- |
-| ESP32 | ✅ | — | GPIO1 / GPIO3 | 80, 40, 16 | |
-| ESP32-C2 | ✅ | — | GPIO20 / GPIO19 | 80, 40, 16 | 26 MHz crystal; rebuild for 40 MHz |
-| ESP32-C3 | ✅ | Serial/JTAG | GPIO21 / GPIO20 | 80, 40, 16 | |
-| ESP32-C5 | ✅ | Serial/JTAG | GPIO11 / GPIO12 | 80 … 4 | also receives 5 GHz |
-| ESP32-C6 | ✅ | Serial/JTAG | GPIO16 / GPIO17 | 80, 40, 16 | continuous capture¹ (256 bins) |
-| ESP32-C61 | ✅ | Serial/JTAG | GPIO11 / GPIO10 | 80 … 4 | continuous capture¹ (256 bins) |
-| ESP32-H2 | ✅ | Serial/JTAG | GPIO24 / GPIO23 | 32, 16, 10.667, 6.4 | Bluetooth radio, see [esp32h2.md](docs/esp32h2.md) |
-| ESP32-H21 | 🚧 | | | | |
-| ESP32-H4 | 🚧 | | | | |
-| ESP32-P4 | ❌ | | | | no radio |
-| ESP32-S2 | ✅ | USB-OTG CDC | GPIO43 / GPIO44 | 80, 40, 16 | 4 MB flash |
-| ESP32-S3 | ✅ | Serial/JTAG | GPIO43 / GPIO44 | 80, 40, 16 | continuous capture¹ and I/Q over USB |
-| ESP32-S31 | ✅ | Serial/JTAG | GPIO58 / GPIO59 | 80 … 4 | continuous capture¹; streaming firmware |
-
-✅ supported · 🚧 not yet supported · ❌ not possible
-
-¹ **Continuous capture** means the chip records the signal without gaps while
-it computes spectra, over native USB only. It can't FFT all of it: only a
-small share of the signal, often a few percent or less, goes into a
-spectrum. The viewer shows that share as FFT coverage. This mode exists at
-256 FFT bins on the C6 and C61, and at all sizes on the S3 and S31. All other
-spectra, including every spectrum over UART, come from separate snapshots
-with gaps in between; the viewer then says "Reception has gaps between
-snapshots".
-
-All chips accept tuning from 100 to 6000 MHz, but the PLL only locks in a
-limited range around 2.4 GHz (and 5 GHz on the C5). ESP32, C2, C3, S2 and S3
-reach down to about 1.85 GHz using a 5/6 LO divider, the C6 to about 1.95 GHz;
-see [rx-controls.md](docs/rx-controls.md).
-
-Snapshots are bursts of up to 16,380 samples (8,190 on the C2 and 12,284 on the
-S2), so there are gaps between them. Gain is not calibrated in dB.
-
-## What you can do with it
-
-**Burst I/Q captures** (all chips): signed 8-bit or packed 10-bit I/Q at the
-rates above. This is what the browser viewer uses.
-
-**On-chip spectra** (all chips): the firmware computes 256–2048-bin FFTs and
-sends compact spectra instead of raw samples. On the C6, C61, S3 and S31 over
-native USB, the receiver keeps recording between FFTs (continuous capture¹),
-but only part of the signal is analyzed. See [spectrum.md](docs/spectrum.md). The original S3 Turbo
-Mode was developed by Zoltan Doczi from [Z2Labs](https://www.z2labs.io/).
-
-**Continuous I/Q on the ESP32-S3**: the second core filters and decimates the
-16 MS/s stream to 15.625–250 kS/s, sent gap-free over native USB. See
-[iq-stream.md](docs/iq-stream.md).
-
-**ESP32-S31 streaming** (separate `esp32s31-stream` firmware, experimental):
-continuous 8-bit I/Q at up to 20 MS/s over high-speed USB or 40 MS/s over
-Gigabit Ethernet, for [SoapyESPSDR](https://github.com/ESPARGOS/SoapyESPSDR).
-See [s31-streaming.md](docs/s31-streaming.md).
-
-![Gqrx displaying an LTE signal at 2.63 GHz, continuously sampled at 40 MSa/s over Ethernet with an ESP32-S31 and SoapyESPSDR.](docs/gqrx-esp-sdr.png)
-
-## Talking to the firmware
-
-The firmware speaks a simple line-based protocol over native USB or UART
-(2 Mbaud): `INFO`, `FREQ 2442`, `CAP16 4096 0` and so on, with binary payloads
-protected by CRC32. The full command reference is in
-[protocol.md](docs/protocol.md).
-
-A few practical notes:
-
-- **UART adapters** must handle 2 Mbaud reliably. Slow bridges (some CH340
-  boards) can use the viewer's *Switch to 1 Mbaud*.
-- **Power**: the radio draws current spikes when it starts. A board powered
-  from a USB-UART adapter's 3.3 V pin can brown out and reboot in a loop; use a
-  proper supply.
-- **Linux**: ModemManager may probe Espressif USB devices and reset them. If
-  the board resets unexpectedly, stop ModemManager or tell it to ignore the
-  device.
-
-## Build and flash
-
-[firmware-targets.json](firmware-targets.json) lists every firmware variant
-and the ESP-IDF commit it is pinned to. Check out that commit, run
-`install.sh <target>` and source `export.sh`. Then build each chip in its own
-build directory:
-
-```sh
-idf.py -B build-s3 -DIDF_TARGET=esp32s3 \
-  -DSDKCONFIG=build-s3/sdkconfig \
-  -DSDKCONFIG_DEFAULTS=sdkconfig.defaults.esp32s3 build
-idf.py -B build-s3 -p /dev/ttyACM0 flash
+```bash
+idf.py set-target esp32c5
+idf.py build
 ```
 
-The S31 needs `idf.py --preview`. `tools/build_firmware.py --profile <id>`
-builds a release image the same way CI does. Host-side tests run with
-`python3 -m unittest discover -s tests`. On real hardware,
-`tools/check_spectrum.py` checks every spectrum profile of a connected board.
+Windows 下本仓库带了一键脚本 `build_esp32c5.bat`（会自己设好 IDF 环境变量）。
 
-Chip-specific notes: [ESP32-C2](docs/esp32c2.md), [ESP32-H2](docs/esp32h2.md).
+> 改过 `sdkconfig.defaults.esp32c5` 之后，记得**先删 `sdkconfig` 再构建**，否则旧值会静默生效。
 
-## Source layout
+### 2. 烧录（N16R8）
 
-- `main/targets/<chip>/`: per-chip receiver, tuning and capture memory guard.
-- `main/families/c5_c6_c61/`: receiver shared by the C5, C6 and C61.
-- `main/targets/esp32s31/streaming/`: the S31 USB/Ethernet streaming application.
-- `main/common/`: serial transport, gain, limits, bandwidth, spectrum and ring capture.
-- `main/diagnostics/`: optional register probes, not part of release builds.
-- `platform/esp32s2/`: patched copy of the ESP-IDF USB CDC console for the S2.
+```bash
+python -m esptool --chip esp32c5 -p COM10 -b 460800 \
+  --before default-reset --after hard-reset write-flash \
+  --flash-mode dio --flash-freq 80m --flash-size 16MB \
+  0x2000 build/bootloader/bootloader.bin \
+  0x8000 build/partition_table/partition-table.bin \
+  0x10000 build/esp_sdr.bin
+```
 
-## Contributors
+### 3. 接上位机
 
-<table>
-  <tr>
-    <td align="center">
-      <a href="https://github.com/Jeija">
-        <img src="https://github.com/Jeija.png?size=160" width="80" height="80" alt="Florian Euchner"><br>
-        <b>Florian Euchner</b>
-      </a>
-    </td>
-    <td align="center">
-      <a href="https://github.com/zodoczi">
-        <img src="https://github.com/zodoczi.png?size=160" width="80" height="80" alt="Zoltan Doczi"><br>
-        <b>Zoltan Doczi</b>
-      </a>
-    </td>
-    <td align="center">
-      <a href="https://github.com/14sea">
-        <img src="https://github.com/14sea.png?size=160" width="80" height="80" alt="14sea"><br>
-        <b>14sea</b>
-      </a>
-    </td>
-  </tr>
-</table>
+- GUI（Windows）：`host/monitor_gui/` 下 `build_exe.bat` 打成单文件 exe，或用 `python host/monitor_gui/esp_sdr_gui.py` 直接跑（只需 pyserial）
+  —— 连 COM10，选模式，点开始。SDR 模式出频谱/瀑布；WiFi/BLE 模式出设备表并落 pcap。
+- 命令行也行：串口协议是文本行 + CRC32 保护的二进制帧，见 [`docs/protocol.md`](docs/protocol.md)
+  （`MON WIFI ON <ch> [hop_ms]`、`MON BLE ON`、`IQS ON <rate>`、`SPEC …`、`CAP16 …`）。
 
-Thanks to [h0m3us3r](https://github.com/h0m3us3r) for
-[eSpDR](https://github.com/h0m3us3r/eSpDR), whose 5/6 LO investigation informed
-our lower-frequency tuning.
+## 仓库结构（本分支新增）
 
-## License
+```
+main/common/mode_manager.{c,h}   射频归属、帧池与发送任务、MON*/IQS* 命令
+main/common/wifi_monitor.{c,h}   混杂模式、信道/轮巡、Radiotap 组装
+main/common/ble_monitor.{c,h}    NimBLE 被动扫描与广播回调
+main/common/iq_stream.{c,h}      IQ estimator + 20 kHz ISR + PSRAM 环形缓冲
+main/common/burst_serial.{c,h}   命令/租约 + 有界发送（背压只丢帧）
+main/families/c5_c6_c61/         C5/C6/C61 共享的 receiver（本分支接入上述模式）
+sdkconfig.defaults.esp32c5       N16R8 的 16 MB flash / 8 MB PSRAM、USB-only、NimBLE observer
 
-ESP-SDR is licensed under the GNU General Public License, version 3 or later
-(`GPL-3.0-or-later`); see [LICENSE](LICENSE). We chose the GPL because we want
-improvements to flow back to the community: if you distribute a modified
-version, you must make its source available under the GPL. Contributing
-upstream is welcome but not required.
+host/monitor_gui/                单文件 GUI（源码；build_exe.bat 可自行打包）
+host/bridge/                     Pluto/iiod 桥接（源码，可无界面运行）
+host/tools/                      离线 I/Q 分析、Python libiio 示例
+host/examples/                   GUI 使用说明、pcap 汇总、Wireshark 管道脚本
+host/tests/                      固件命令桩、GUI mock、自测报告
+host/docs/                       设计文档、三模式说明
+docs/post/                       项目介绍文章（含配图）
+docs/upstream-README.md          上游 ESPARGOS README 原文（保留以便对照）
+```
 
-The capture mechanism itself is not covered by copyright, only this code is.
-You are free to implement it independently under any license.
+上位机只放了源码，避免把几十 MB 的打包 exe 塞进仓库；需要现成 exe 就按
+`host/monitor_gui/README.md` 里的 `build_exe.bat` 打一个（PyInstaller，一条命令）。
 
-Third-party code keeps its own license, including the Apache-2.0 ESP-IDF code in
-`platform/esp32s2/esp_usb_cdc_rom_console/`, the
-[ESP-DSP component](components/esp-dsp/LICENSE), and the FFT kernels derived
-from it in `main/targets/esp32s3/s3_fft_rnd.S` and
-`main/targets/esp32s31/burst/s31_fft_rnd.S`.
+## 文档
+
+- 项目来龙去脉（为什么先做抓包、再移植连续采样、最后接 SDR#）：
+  [`docs/post/ESP-SDR-项目介绍.md`](docs/post/ESP-SDR-项目介绍.md)
+- GUI 四个模式的操作步骤与示例：`host/examples/GUI使用说明.md`
+- 固件协议与帧格式：`docs/protocol.md`；片上频谱：`docs/spectrum.md`；原理：`docs/how-it-works.md`
+- 上游 README（ESPARGOS 原版，含全芯片支持矩阵）：[`docs/upstream-README.md`](docs/upstream-README.md)
+
+## 已知限制
+
+- 真实 I/Q 带宽受传输限制：USB-Serial-JTAG 约 640 kB/s，因此连续 I/Q 上限 **80 kS/s**
+  （SDR# 里显示的更大带宽是主机侧插值，只有中心一段是真数据）。
+- C5 调谐步进 **1 MHz**（固件 `FREQ` 只到整 MHz）；100–6000 MHz 都接受，但 PLL 只在
+  2.4 GHz 与 5 GHz 附近稳定锁定。
+- 增益与幅度**未校准**，只适合相对观察，不作计量。
+- BLE 只能被动扫描，控制器固定扫 37/38/39，抓包信道字段统一记为 37。
+- 串口同一时刻只能有一个消费者：GUI、独立桥接、其它工具互斥。
+
+## 许可与致谢
+
+本仓库与上游一样使用 **GPL-3.0-or-later**（见 `LICENSE`）：分发修改版时需要一并提供源码。
+新增的监听/连续采样/桥接代码同样按 GPL-3.0-or-later 发布。
+
+- 原始 ESP-SDR 固件与 I/Q 采集机制：ESPARGOS 项目（Florian Euchner、Marc Gauger 等）
+- 连续采样思路：`cyber-murmel/esp-sdr-zephyr`（Murmel）
+- 主机侧包装成标准 SDR 的思路：`z2labs/esp-sdr-bridge`（Zoltan Doczi）
+- 片上 FFT 使用 ESP-DSP（Apache-2.0）
