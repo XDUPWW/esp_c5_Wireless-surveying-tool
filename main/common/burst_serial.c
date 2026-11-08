@@ -9,6 +9,7 @@
 #include "esp_check.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "soc/soc_caps.h"
 #if SOC_USB_SERIAL_JTAG_SUPPORTED
@@ -24,7 +25,18 @@
 #endif
 
 #define COMMAND_SIZE 128
+/* Whole transfers from different tasks (command replies, monitor frames)
+ * must not interleave on the wire. */
+static SemaphoreHandle_t tx_mutex;
+/* Output routing. active_port carries every reply, payload and monitor
+ * frame; in AUTO mode (the default) it follows the port that sent the last
+ * command. input_port is the session's command side: the serve lease, the
+ * BAUD transport check and the stream-stop drain key off it, so OUTPUT
+ * USB|UART can pin the data to one transport while commands keep arriving
+ * on the other. */
 static burst_serial_port_t active_port = BURST_SERIAL_USB;
+static burst_serial_port_t input_port = BURST_SERIAL_USB;
+static bool output_auto = true;
 static unsigned next_port;
 static unsigned uart_baud = CONFIG_ESP_SDR_UART_BAUD;
 static struct {
@@ -40,7 +52,7 @@ static struct {
 static bool baud_command(const char *line) {
     if (strcmp(line, "BAUD?") && strcmp(line, "BAUD") && strncmp(line, "BAUD ", 5)) return false;
 #if CONFIG_ESP_SDR_UART_ENABLED
-    if (active_port == BURST_SERIAL_UART) {
+    if (input_port == BURST_SERIAL_UART) {
         char response[32];
         if (!strcmp(line, "BAUD?")) {
             int length = snprintf(response, sizeof(response), "BAUD %u\n", uart_baud);
@@ -68,12 +80,42 @@ static bool baud_command(const char *line) {
     return true;
 }
 
+/* Transport command consumed for every receiver backend. The ACK travels
+ * on the current output port and the switch takes effect right after it,
+ * so a request typed on the UART cannot strand its own ACK. Recovery from
+ * a pinned-but-disconnected port: type OUTPUT AUTO on the live port once
+ * the five-second lease has expired (or send RELEASE first). */
+static bool output_command(const char *line) {
+    if (strcmp(line, "OUTPUT?") && strcmp(line, "OUTPUT USB") && strcmp(line, "OUTPUT UART") &&
+        strcmp(line, "OUTPUT AUTO"))
+        return false;
+    if (!strcmp(line, "OUTPUT?")) {
+        const char *mode = output_auto ? "AUTO" : active_port == BURST_SERIAL_UART ? "UART" : "USB";
+        char response[24];
+        int length = snprintf(response, sizeof(response), "OUTPUT %s\n", mode);
+        burst_serial_send(response, length);
+        return true;
+    }
+#if !CONFIG_ESP_SDR_UART_ENABLED
+    if (!strcmp(line, "OUTPUT UART")) {
+        burst_serial_send("ERR output_transport\n", sizeof("ERR output_transport\n") - 1);
+        return true;
+    }
+#endif
+    burst_serial_send("OK\n", sizeof("OK\n") - 1);
+    output_auto = !strcmp(line, "OUTPUT AUTO");
+    if (!output_auto)
+        active_port = !strcmp(line, "OUTPUT UART") ? BURST_SERIAL_UART : BURST_SERIAL_USB;
+    return true;
+}
+
 #if CONFIG_IDF_TARGET_ESP32S2
 static void usb_ready(void *arg) {
     (void)arg;
 }
 #endif
 void burst_serial_init(void) {
+    tx_mutex = xSemaphoreCreateMutex();
 #if CONFIG_IDF_TARGET_ESP32S2
     ESP_ERROR_CHECK(esp_usb_console_set_cb(usb_ready, usb_ready, NULL));
 #endif
@@ -101,6 +143,11 @@ void burst_serial_init(void) {
 burst_serial_port_t burst_serial_port(void) {
     return active_port;
 }
+/* The port the session's commands arrive on; the serve lease compares
+ * against this, independent of where OUTPUT pinned the data. */
+burst_serial_port_t burst_serial_input_port(void) {
+    return input_port;
+}
 unsigned burst_serial_baud(void) {
     return active_port == BURST_SERIAL_UART ? uart_baud : 0;
 }
@@ -125,7 +172,7 @@ static int read_port(burst_serial_port_t port, void *buffer, size_t size) {
 bool burst_serial_stop_requested(void) {
     char c;
     bool stopped = false;
-    for (unsigned j = 0; j < 128 && read_port(active_port, &c, 1) == 1; j++) {
+    for (unsigned j = 0; j < 128 && read_port(input_port, &c, 1) == 1; j++) {
         stopped = true;
         if (c == '\n') break;
     }
@@ -158,12 +205,14 @@ int burst_serial_poll_line(char *line, size_t capacity) {
             input[port].used = 0;
             input[port].overflow = false;
             if (!used && !overflow) continue;
-            active_port = port;
+            input_port = port;
+            if (output_auto) active_port = port;
             next_port = (port + 1) % BURST_SERIAL_COUNT;
             if (overflow || used >= capacity) return -1;
             memcpy(line, input[port].line, used);
             line[used] = '\0';
             if (baud_command(line)) return 0;
+            if (output_command(line)) return 0;
             return 1;
         }
     }
@@ -203,10 +252,19 @@ size_t burst_serial_try_send(const void *data, size_t size) {
     return done;
 }
 
-bool IRAM_ATTR burst_serial_send(const void *data, size_t size) {
+/* Bounded send core: `deadline` caps the whole transfer. This runs with
+ * tx_mutex held, and the command loop is the task that drains this port's RX
+ * FIFO, so the TX FIFO wait must not starve it: spin briefly (the FIFO
+ * normally frees within microseconds), then yield. A plain busy-spin used to
+ * starve the command loop for the full 3 s deadline per frame whenever the
+ * host stopped reading, which wedged the session (IQS OFF/IQS? unanswerable,
+ * host writes blocked). A plain vTaskDelay(1) per packet would instead cap
+ * throughput at ~60 kB/s, hence the hybrid. */
+static bool IRAM_ATTR send_nolock_deadline(const void *data, size_t size, int64_t deadline) {
     const uint8_t *p = data;
     size_t original = size;
-    int64_t deadline = transfer_deadline(size);
+    const int64_t spin_budget_us = 200;
+    int64_t spin_deadline = 0;
     while (size) {
         if (esp_timer_get_time() >= deadline) return false;
         int sent;
@@ -216,7 +274,15 @@ bool IRAM_ATTR burst_serial_send(const void *data, size_t size) {
             if (!sent) vTaskDelay(1);
         } else {
 #if SOC_USB_SERIAL_JTAG_SUPPORTED
-            if (!usb_serial_jtag_ll_txfifo_writable()) continue;
+            if (!usb_serial_jtag_ll_txfifo_writable()) {
+                int64_t now = esp_timer_get_time();
+                if (!spin_deadline) spin_deadline = now + spin_budget_us;
+                if (now < spin_deadline) continue;
+                spin_deadline = 0;
+                vTaskDelay(1);
+                continue;
+            }
+            spin_deadline = 0;
             sent = usb_serial_jtag_ll_write_txfifo(p, size > 64 ? 64 : size);
             usb_serial_jtag_ll_txfifo_flush();
 #elif CONFIG_IDF_TARGET_ESP32S2
@@ -233,14 +299,40 @@ bool IRAM_ATTR burst_serial_send(const void *data, size_t size) {
     }
 #if SOC_USB_SERIAL_JTAG_SUPPORTED
     if (active_port == BURST_SERIAL_USB && original && original % 64 == 0) {
-        while (!usb_serial_jtag_ll_txfifo_writable())
-            if (esp_timer_get_time() >= deadline) return false;
+        spin_deadline = 0;
+        while (!usb_serial_jtag_ll_txfifo_writable()) {
+            int64_t now = esp_timer_get_time();
+            if (now >= deadline) return false;
+            if (!spin_deadline) spin_deadline = now + spin_budget_us;
+            if (now < spin_deadline) continue;
+            spin_deadline = 0;
+            vTaskDelay(1);
+        }
         usb_serial_jtag_ll_txfifo_flush();
     }
 #else
     (void)original;
 #endif
     return true;
+}
+
+static bool IRAM_ATTR burst_serial_send_nolock(const void *data, size_t size) {
+    return send_nolock_deadline(data, size, transfer_deadline(size));
+}
+
+bool burst_serial_send(const void *data, size_t size) {
+    xSemaphoreTake(tx_mutex, portMAX_DELAY);
+    bool ok = burst_serial_send_nolock(data, size);
+    xSemaphoreGive(tx_mutex);
+    return ok;
+}
+
+bool burst_serial_send_timeout(const void *data, size_t size, unsigned ms) {
+    if (!ms) ms = 1;
+    if (xSemaphoreTake(tx_mutex, pdMS_TO_TICKS(ms)) != pdTRUE) return false;
+    bool ok = send_nolock_deadline(data, size, esp_timer_get_time() + (int64_t)ms * 1000);
+    xSemaphoreGive(tx_mutex);
+    return ok;
 }
 
 static void serve_reply(const char *text) {
@@ -258,7 +350,7 @@ void burst_serial_serve(void (*handle)(char *line)) {
             vTaskDelay(1);
             continue;
         }
-        int port = burst_serial_port();
+        int port = (int)burst_serial_input_port();
         if (owner >= 0 && owner != port) {
             serve_reply("ERR busy\n");
             continue;
